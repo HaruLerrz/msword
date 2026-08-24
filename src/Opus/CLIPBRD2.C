@@ -74,6 +74,13 @@ extern int				wwCur;
 extern HANDLE OpusUnicodeCreateClipboardHandle();
 extern int OpusUnicodeClipboardToLegacy();
 extern int OpusUnicodeBindPendingClipboard();
+
+HANDLE HDataWriteDocCps();
+HANDLE HWriteText();
+HANDLE HWritePict();
+HANDLE HWriteRTF();
+HANDLE HRenderClipLink();
+HANDLE GlobalAlloc2();
 #endif
 
 extern LPCH LpchIncr();
@@ -272,7 +279,7 @@ int cf;
 /*  %%Function:  HDataWriteDocCps   %%Owner:  bobz       */
 
 
-HDataWriteDocCps (cf, doc, cpFirst, cpLim, cbInitial, pfBlankPic)
+HANDLE HDataWriteDocCps (cf, doc, cpFirst, cpLim, cbInitial, pfBlankPic)
 int cf, doc;
 CP cpFirst, cpLim;
 int cbInitial;
@@ -336,7 +343,7 @@ int *pfBlankPic;  /* set true if an empty picture; else ignored */
 /*  %%Function:  HWriteText   %%Owner:  bobz       */
 
 
-HWriteText (doc, cpFirst, cpLim, cbInitial)
+HANDLE HWriteText (doc, cpFirst, cpLim, cbInitial)
 int doc;
 CP cpFirst, cpLim;
 int cbInitial;
@@ -475,7 +482,7 @@ Failed:
 /*  %%Function:  HWritePict   %%Owner:  bobz       */
 
 
-HWritePict (doc, cpFirst, cpLim, cbInitial, pfBlankPic, cf)
+HANDLE HWritePict (doc, cpFirst, cpLim, cbInitial, pfBlankPic, cf)
 int doc;
 CP cpFirst, cpLim;
 int cbInitial;

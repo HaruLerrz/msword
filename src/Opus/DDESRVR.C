@@ -35,6 +35,8 @@ extern BOOL            vfAbortInsert;
 extern IDF	       vidf;
 
 #ifdef OPUS_X64
+HANDLE HDataWriteDocCps();
+HANDLE HDataWriteSti();
 csconst CHAR stAppDde[] = { 7, 'W', 'i', 'n', 'W', 'o', 'r', 'd' };
 csconst CHAR stSystemDde[] = { 6, 'S', 'y', 's', 't', 'e', 'm' };
 #else
@@ -475,7 +477,7 @@ HWND hwndThem;
 	of some failure.
 */
 /*  %%Function:HRenderClipLink %%Owner:peterj  */
-HRenderClipLink ()
+HANDLE HRenderClipLink ()
 
 {
 	LPCH lpch;
@@ -875,7 +877,7 @@ LFailed:
 	cannot be written.  Handle has cbDMS bytes at the begining unused.
 */
 /*  %%Function:HDataWriteSti %%Owner:peterj  */
-HDataWriteSti (sti)
+HANDLE HDataWriteSti (sti)
 int sti;
 {
 	HANDLE h = NULL;
