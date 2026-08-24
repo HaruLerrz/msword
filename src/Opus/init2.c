@@ -820,6 +820,13 @@ DisplayRibbonInit()
 /* %%Function:FAddToSystemMenu %%Owner:PETERJ */
 FAddToSystemMenu()
 {
+#ifdef OPUS_X64
+	/*
+	 * The original Win16 code adds "Run..." to the window system menu.
+	 * Skip this non-essential customization in the native x64 port.
+	 */
+	return fTrue;
+#else
 	HMENU hSysMenu;
 	BOOL f;
 	int w;
@@ -838,6 +845,7 @@ FAddToSystemMenu()
 		}
 
 	return (f && (w==0 || w==-1));
+#endif
 }
 
 
