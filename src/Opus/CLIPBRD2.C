@@ -246,12 +246,19 @@ int cf;
 
 	HANDLE h;
 	int fBlankPic = fFalse;
+	CP cpLim;
 
 	Assert(vsab.fOwnClipboard);
 
+#ifdef OPUS_X64
+	cpLim = CpMacDocEdit(docScrap);
+#else
+	cpLim = CpMacDoc(docScrap) - cchEop;
+#endif
+
 	/* render in format cf */
-	h = HDataWriteDocCps (cf, docScrap, cp0, 
-			CpMacDoc (docScrap) - cchEop, 0, &fBlankPic);
+	h = HDataWriteDocCps (cf, docScrap, cp0,
+			cpLim, 0, &fBlankPic);
 
 	if (h != NULL)
 		/* data sucessfully written */
