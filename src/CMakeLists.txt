@@ -704,5 +704,4 @@ endforeach()
 
 add_library(opus_x64_runtime STATIC
     port/original/opus_original_chupper.c
-    port/original/opus_elx_dispatch.cpp
-   
+    port/original/opus_elx_d
