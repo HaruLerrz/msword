@@ -3886,12 +3886,32 @@ extern "C" HANDLE OpusUnicodeCreateClipboardHandle(
     }
     std::wstring wide;
     wide.reserve(length);
+
+    long document_cp = cp_first;
+
     for (std::size_t index = 0; index < length; ++index) {
-        std::uint32_t scalar = OpusUnicodeScalarAt(
-            doc, cp_first + static_cast<long>(index));
-        if (scalar == 0) scalar = decode_legacy_byte(
-            static_cast<unsigned char>(source[index]), 1252);
+        const unsigned char byte =
+            static_cast<unsigned char>(source[index]);
+
+        std::uint32_t scalar =
+            OpusUnicodeScalarAt(doc, document_cp);
+
+        /*
+         * HWriteText inserts CR/LF pairs for formatted screen-line wraps.
+         * Those bytes do not consume document CPs. A real document line
+         * break, however, is represented in the Unicode sidecar and should
+         * advance the document position normally.
+         */
+        if ((byte == '\r' || byte == '\n') &&
+            scalar != static_cast<std::uint32_t>(byte)) {
+            continue;
+        }
+
+        if (scalar == 0)
+            scalar = decode_legacy_byte(byte, 1252);
+
         wide += scalar_to_wide(scalar);
+        ++document_cp;
     }
     GlobalUnlock(legacy_handle);
     if (wide.size() > (kMaxTextBytes / sizeof(wchar_t)) - 1) return nullptr;
