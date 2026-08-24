@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25) 
- 
+   
 project(MicrosoftWordX64Port VERSION 0.2.0 LANGUAGES C CXX RC)
 
 if(NOT WIN32)
