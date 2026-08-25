@@ -2098,8 +2098,15 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
             const LRESULT selection =
                 SendMessageA(found->second.window, CB_GETCURSEL, 0, 0);
             if (selection != CB_ERR) {
-                dialog->controls[static_cast<Tmc>(tmc + 1)].value =
-                    static_cast<Word>(selection);
+                /* Ribbon font and point-size controls are adjacent logical
+                   TMCs.  Do not overwrite the point-size value with the
+                   native font-list selection index.  Other combo layouts
+                   still use tmc + 1 as the legacy list-item state. */
+                if (dialog->hid != kCxtRibbonIconBar ||
+                    tmc != kTmcUserMin) {
+                    dialog->controls[static_cast<Tmc>(tmc + 1)].value =
+                        static_cast<Word>(selection);
+                }
                 found->second.value = static_cast<Word>(selection);
                 found->second.text = selected_list_text(found->second);
                 refresh_font_control_value(*dialog, tmc, found->second,
