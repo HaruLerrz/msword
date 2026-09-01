@@ -144,6 +144,10 @@ struct Win95SaveAlias {
 Win95SaveAlias g_win95_save_alias;
 std::unordered_map<std::string, std::string> g_win95_saved_aliases;
 std::string g_win95_staging_directory;
+#ifdef OPUS_X64
+std::unordered_map<std::string, std::wstring> g_x64_font_alias_to_wide;
+int g_x64_unicode_font_alias_counter = 1;
+#endif
 
 struct Win95AliasCleanup {
     ~Win95AliasCleanup() {
@@ -1294,29 +1298,44 @@ void refresh_font_control_value(DialogState& dialog, const Tmc raw_tmc,
     const Tmc tmc = static_cast<Tmc>(raw_tmc & ~0x8000u);
     if (read_native_text && state.window != nullptr &&
         IsWindow(state.window)) {
-        HWND text_window = state.window;
-        if (window_is_class(state.window, "COMBOBOX")) {
-            COMBOBOXINFO info{};
-            info.cbSize = sizeof(info);
-            if (GetComboBoxInfo(state.window, &info) &&
-                info.hwndItem != nullptr) {
-                text_window = info.hwndItem;
+        bool used_selected_backend = false;
+#ifdef OPUS_X64
+        if (is_font_name_control(dialog, tmc) &&
+            window_is_class(state.window, "COMBOBOX")) {
+            const LRESULT selection =
+                SendMessageW(state.window, CB_GETCURSEL, 0, 0);
+            if (selection != CB_ERR &&
+                static_cast<std::size_t>(selection) < state.entries.size()) {
+                state.text = state.entries[static_cast<std::size_t>(selection)];
+                used_selected_backend = true;
             }
         }
-        const int wide_length = GetWindowTextLengthW(text_window);
-        std::vector<wchar_t> wide_text(
-            static_cast<std::size_t>(wide_length) + 1);
-        GetWindowTextW(text_window, wide_text.data(),
-                       static_cast<int>(wide_text.size()));
-        const int byte_count = WideCharToMultiByte(
-            CP_ACP, 0, wide_text.data(), -1, nullptr, 0, nullptr, nullptr);
-        if (byte_count > 0) {
-            std::vector<char> text(static_cast<std::size_t>(byte_count));
-            WideCharToMultiByte(CP_ACP, 0, wide_text.data(), -1, text.data(),
-                                byte_count, nullptr, nullptr);
-            state.text = text.data();
-        } else {
-            state.text.clear();
+#endif
+        if (!used_selected_backend) {
+            HWND text_window = state.window;
+            if (window_is_class(state.window, "COMBOBOX")) {
+                COMBOBOXINFO info{};
+                info.cbSize = sizeof(info);
+                if (GetComboBoxInfo(state.window, &info) &&
+                    info.hwndItem != nullptr) {
+                    text_window = info.hwndItem;
+                }
+            }
+            const int wide_length = GetWindowTextLengthW(text_window);
+            std::vector<wchar_t> wide_text(
+                static_cast<std::size_t>(wide_length) + 1);
+            GetWindowTextW(text_window, wide_text.data(),
+                           static_cast<int>(wide_text.size()));
+            const int byte_count = WideCharToMultiByte(
+                CP_ACP, 0, wide_text.data(), -1, nullptr, 0, nullptr, nullptr);
+            if (byte_count > 0) {
+                std::vector<char> text(static_cast<std::size_t>(byte_count));
+                WideCharToMultiByte(CP_ACP, 0, wide_text.data(), -1,
+                                    text.data(), byte_count, nullptr, nullptr);
+                state.text = text.data();
+            } else {
+                state.text.clear();
+            }
         }
     }
 
@@ -1334,64 +1353,115 @@ void refresh_font_control_value(DialogState& dialog, const Tmc raw_tmc,
 #ifdef OPUS_X64
 struct WindowsFontChoice {
     std::wstring display_name;
-    std::string legacy_name;
+    std::string backend_key;
 };
 
-std::string font_name_to_acp(const std::wstring& name) {
-    const int bytes = WideCharToMultiByte(
-        CP_ACP, 0, name.c_str(), -1, nullptr, 0, "?", nullptr);
-    if (bytes <= 1) {
-        return {};
+bool usable_legacy_font_name(const std::string& name) {
+    return !name.empty() && name.front() != '@' &&
+           name.find('?') == std::string::npos;
+}
+
+std::string trim_legacy_font_name_to_lf_facesize(const std::string& text) {
+    if (text.empty()) return {};
+    const char* const begin = text.c_str();
+    const char* current = begin;
+    const char* accepted = begin;
+    while (*current != '\0') {
+        const char* const next = CharNextA(current);
+        if (next <= current ||
+            static_cast<std::size_t>(next - begin) >= LF_FACESIZE) break;
+        accepted = next;
+        current = next;
     }
-    std::string result(static_cast<std::size_t>(bytes), '\0');
-    WideCharToMultiByte(CP_ACP, 0, name.c_str(), -1,
-                        result.data(), bytes, "?", nullptr);
-    result.resize(static_cast<std::size_t>(bytes - 1));
+    std::string result(begin, static_cast<std::size_t>(accepted - begin));
+    while (!result.empty() && result.back() == ' ') result.pop_back();
     return result;
 }
 
-int CALLBACK collect_system_font_w(const LOGFONTW* logical_font,
-                                   const TEXTMETRICW*, DWORD,
-                                   LPARAM parameter) {
-    if (logical_font == nullptr || logical_font->lfFaceName[0] == L'\0' ||
-        logical_font->lfFaceName[0] == L'@') {
-        return 1;
+std::string wide_to_acp_lossless(const wchar_t* text) {
+    if (text == nullptr || text[0] == L'\0') return {};
+    BOOL used_default = FALSE;
+    const int n = WideCharToMultiByte(
+        CP_ACP, WC_NO_BEST_FIT_CHARS, text, -1, nullptr, 0, "?", &used_default);
+    if (n <= 1 || used_default) return {};
+    std::string out(static_cast<std::size_t>(n), '\0');
+    used_default = FALSE;
+    if (WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, text, -1,
+                            out.data(), n, "?", &used_default) <= 0 ||
+        used_default) return {};
+    out.resize(static_cast<std::size_t>(n - 1));
+    out = trim_legacy_font_name_to_lf_facesize(out);
+    return usable_legacy_font_name(out) ? out : std::string{};
+}
+
+std::string make_generated_unicode_font_alias() {
+    char alias[LF_FACESIZE] = {};
+    for (int attempt = 0; attempt < 10000; ++attempt) {
+        std::snprintf(alias, sizeof(alias), "UFont %04d",
+                      g_x64_unicode_font_alias_counter++);
+        if (g_x64_font_alias_to_wide.find(alias) ==
+            g_x64_font_alias_to_wide.end()) return alias;
     }
-    auto* fonts =
-        reinterpret_cast<std::vector<WindowsFontChoice>*>(parameter);
+    return {};
+}
+
+const std::wstring* wide_font_name_for_backend(const std::string& name) {
+    auto found = g_x64_font_alias_to_wide.find(name);
+    if (found == g_x64_font_alias_to_wide.end()) {
+        const std::string short_name =
+            trim_legacy_font_name_to_lf_facesize(name);
+        found = g_x64_font_alias_to_wide.find(short_name);
+        if (found == g_x64_font_alias_to_wide.end()) return nullptr;
+    }
+    return &found->second;
+}
+
+void set_x64_font_control_display_text(ControlState& state) {
+    if (state.window == nullptr || !IsWindow(state.window)) return;
+    const std::wstring* wide = wide_font_name_for_backend(state.text);
+    if (wide != nullptr) SetWindowTextW(state.window, wide->c_str());
+    else SetWindowTextA(state.window, state.text.c_str());
+}
+
+int CALLBACK collect_system_font_w(const LOGFONTW* lf,
+                                   const TEXTMETRICW*, DWORD, LPARAM param) {
+    if (lf == nullptr || lf->lfFaceName[0] == L'\0' ||
+        lf->lfFaceName[0] == L'@') return 1;
     WindowsFontChoice choice;
-    choice.display_name = logical_font->lfFaceName;
-    choice.legacy_name = font_name_to_acp(choice.display_name);
-    fonts->push_back(std::move(choice));
+    choice.display_name = lf->lfFaceName;
+    choice.backend_key = wide_to_acp_lossless(choice.display_name.c_str());
+    if (choice.backend_key.empty())
+        choice.backend_key = make_generated_unicode_font_alias();
+    if (choice.backend_key.empty()) return 1;
+    if (g_x64_font_alias_to_wide.find(choice.backend_key) ==
+        g_x64_font_alias_to_wide.end())
+        g_x64_font_alias_to_wide[choice.backend_key] = choice.display_name;
+    reinterpret_cast<std::vector<WindowsFontChoice>*>(param)->
+        push_back(std::move(choice));
     return 1;
 }
 
 std::vector<WindowsFontChoice> installed_windows_fonts() {
     std::vector<WindowsFontChoice> fonts;
+    g_x64_font_alias_to_wide.clear();
+    g_x64_unicode_font_alias_counter = 1;
     const HDC dc = GetDC(nullptr);
     if (dc != nullptr) {
-        LOGFONTW logical_font{};
-        logical_font.lfCharSet = DEFAULT_CHARSET;
-        EnumFontFamiliesExW(
-            dc, &logical_font,
+        LOGFONTW lf{};
+        lf.lfCharSet = DEFAULT_CHARSET;
+        EnumFontFamiliesExW(dc, &lf,
             reinterpret_cast<FONTENUMPROCW>(collect_system_font_w),
             reinterpret_cast<LPARAM>(&fonts), 0);
         ReleaseDC(nullptr, dc);
     }
     std::sort(fonts.begin(), fonts.end(),
-              [](const WindowsFontChoice& left,
-                 const WindowsFontChoice& right) {
-                  return _wcsicmp(left.display_name.c_str(),
-                                  right.display_name.c_str()) < 0;
-              });
-    fonts.erase(
-        std::unique(fonts.begin(), fonts.end(),
-                    [](const WindowsFontChoice& left,
-                       const WindowsFontChoice& right) {
-                        return _wcsicmp(left.display_name.c_str(),
-                                        right.display_name.c_str()) == 0;
-                    }),
-        fonts.end());
+        [](const WindowsFontChoice& l, const WindowsFontChoice& r) {
+            return _wcsicmp(l.display_name.c_str(), r.display_name.c_str()) < 0;
+        });
+    fonts.erase(std::unique(fonts.begin(), fonts.end(),
+        [](const WindowsFontChoice& l, const WindowsFontChoice& r) {
+            return _wcsicmp(l.display_name.c_str(), r.display_name.c_str()) == 0;
+        }), fonts.end());
     return fonts;
 }
 #else
@@ -1450,7 +1520,7 @@ void replace_font_list_entries(
     reset_native_list(state);
 
     for (const auto& entry : entries) {
-        state.entries.push_back(entry.legacy_name);
+        state.entries.push_back(entry.backend_key);
         SendMessageW(state.window, CB_ADDSTRING, 0,
                      reinterpret_cast<LPARAM>(
                          entry.display_name.c_str()));
@@ -1676,7 +1746,11 @@ void read_character_cab(DialogState& dialog) {
     font.text = font_name;
     font.value = static_cast<Word>(cab->ftc);
     if (font.window != nullptr) {
+#ifdef OPUS_X64
+        set_x64_font_control_display_text(font);
+#else
         SetWindowTextA(font.window, font.text.c_str());
+#endif
     }
 
     char size_text[32] = {};
@@ -2271,14 +2345,28 @@ void handle_dialog_command(const Hdlg handle, const WPARAM w_param,
                         static_cast<Word>(selection);
                 }
                 found->second.value = static_cast<Word>(selection);
-                found->second.text = selected_list_text(found->second);
-                refresh_font_control_value(*dialog, tmc, found->second,
-                                           false);
+#ifdef OPUS_X64
+                if (is_font_name_control(*dialog, tmc) &&
+                    static_cast<std::size_t>(selection) <
+                        found->second.entries.size()) {
+                    found->second.text =
+                        found->second.entries[static_cast<std::size_t>(selection)];
+                } else
+#endif
+                {
+                    found->second.text = selected_list_text(found->second);
+                }
+                refresh_font_control_value(*dialog, tmc, found->second, false);
                 OpusX64TraceRibbon("combo-select", notification, tmc,
                                    found->second.value,
                                    static_cast<int>(selection), 0, 0, 0);
-                SetWindowTextA(found->second.window,
-                               found->second.text.c_str());
+#ifdef OPUS_X64
+                if (!is_font_name_control(*dialog, tmc))
+#endif
+                {
+                    SetWindowTextA(found->second.window,
+                                   found->second.text.c_str());
+                }
                 invoke_dialog_proc(*dialog, kDlmClick,
                                    static_cast<Tmc>(tmc + 1));
                 invoke_dialog_proc(*dialog, kDlmChange, tmc);
@@ -2795,6 +2883,24 @@ HWND vhWndMsgBoxParent = nullptr;
 extern void** hcabDlgCur;
 extern std::uintptr_t wRefDlgCur;
 
+int OpusX64ResolveFontAlias(const char* alias, wchar_t* face_name,
+                            const int face_name_count) {
+#ifdef OPUS_X64
+    if (alias == nullptr || face_name == nullptr || face_name_count <= 0)
+        return false;
+    const std::wstring* wide = wide_font_name_for_backend(alias);
+    if (wide == nullptr) return false;
+    const int limit = (std::min)(
+        face_name_count - 1, static_cast<int>(wide->size()));
+    for (int i = 0; i < limit; ++i)
+        face_name[i] = (*wide)[static_cast<std::size_t>(i)];
+    face_name[limit] = L'\0';
+    return true;
+#else
+    return false;
+#endif
+}
+
 void OpusRegisterOriginalDialogCallbacks(
     OriginalListProc list_font_name, OriginalListProc list_font_size,
     OriginalListProc list_styles, OriginalListProc list_character_color,
@@ -3145,7 +3251,15 @@ void SetTmcText_sdm21(Tmc tmc, char* text) {
         state.text.resize(state.text_limit);
     }
     if (state.window != nullptr && IsWindow(state.window)) {
-        SetWindowTextA(state.window, state.text.c_str());
+#ifdef OPUS_X64
+        if (is_font_name_control(
+                g_dialog, static_cast<Tmc>(tmc & ~0x8000u))) {
+            set_x64_font_control_display_text(state);
+        } else
+#endif
+        {
+            SetWindowTextA(state.window, state.text.c_str());
+        }
     }
     refresh_font_control_value(g_dialog, tmc, state, false);
 }

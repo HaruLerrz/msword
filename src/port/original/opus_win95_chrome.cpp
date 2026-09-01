@@ -1201,7 +1201,7 @@ void show_text_color_palette(HWND app, HWND toolbar) {
 }
 
 void forward_combo(HWND mirror, HWND source, int notification,
-                   bool& edit_dirty) {
+                   bool& edit_dirty, bool unicode_selection = false) {
     if (mirror == nullptr || source == nullptr || !IsWindow(source)) {
         return;
     }
@@ -1221,14 +1221,25 @@ void forward_combo(HWND mirror, HWND source, int notification,
         wide.resize(static_cast<std::size_t>(length) + 1, L'\0');
         GetWindowTextW(mirror, &wide[0], length + 1);
     }
-    const std::string text = ansi_from_wide(wide.c_str());
-    const LRESULT selection = SendMessageA(
-        source, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
-        reinterpret_cast<LPARAM>(text.c_str()));
-    if (selection != CB_ERR) {
-        SendMessageA(source, CB_SETCURSEL, selection, 0);
+    bool selected_unicode_item = false;
+    if (unicode_selection && mirror_selection != CB_ERR) {
+        const LRESULT selection = SendMessageW(
+            source, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+            reinterpret_cast<LPARAM>(wide.c_str()));
+        if (selection != CB_ERR) {
+            SendMessageW(source, CB_SETCURSEL, selection, 0);
+            selected_unicode_item = true;
+        }
     }
-    SetWindowTextA(source, text.c_str());
+    if (!selected_unicode_item) {
+        const std::string text = ansi_from_wide(wide.c_str());
+        const LRESULT selection = SendMessageA(
+            source, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+            reinterpret_cast<LPARAM>(text.c_str()));
+        if (selection != CB_ERR)
+            SendMessageA(source, CB_SETCURSEL, selection, 0);
+        SetWindowTextA(source, text.c_str());
+    }
     const HWND parent = GetParent(source);
     const int control_id = GetDlgCtrlID(source);
     if (notification == CBN_SELCHANGE) {
@@ -3007,7 +3018,7 @@ LRESULT CALLBACK toolbar_window_proc(HWND window, UINT message,
             }
             if (id == kComboFont) {
                 forward_combo(state->font_combo, state->source_font,
-                              notification, state->font_edit_dirty);
+                              notification, state->font_edit_dirty, true);
                 return 0;
             }
             if (id == kComboSize) {
