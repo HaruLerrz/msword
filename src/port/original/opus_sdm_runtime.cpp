@@ -572,6 +572,54 @@ HWND create_native_control(DialogState& dialog, const Tmc tmc,
     return state.window;
 }
 
+#ifdef OPUS_X64
+HFONT unicode_font_combo_ui_font() {
+    static HFONT font = nullptr;
+    static bool initialized = false;
+    if (!initialized) {
+        initialized = true;
+        NONCLIENTMETRICSW metrics{};
+        metrics.cbSize = sizeof(metrics);
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(metrics),
+                                  &metrics, 0)) {
+            LOGFONTW logical_font = metrics.lfMessageFont;
+            logical_font.lfCharSet = DEFAULT_CHARSET;
+            font = CreateFontIndirectW(&logical_font);
+        }
+    }
+    return font;
+}
+
+HWND create_native_unicode_font_combo(DialogState& dialog, const Tmc tmc,
+                                      const Rec& rectangle,
+                                      const DWORD control_style) {
+    if (dialog.window == nullptr || !IsWindow(dialog.window)) {
+        return nullptr;
+    }
+    auto& state = dialog.controls[tmc];
+    state.rectangle = rectangle;
+    state.text.clear();
+    state.window = CreateWindowExW(
+        0, L"COMBOBOX", L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | control_style,
+        scaled_x(rectangle.x), scaled_y(rectangle.y),
+        (std::max)(1, scaled_x(rectangle.dx)),
+        (std::max)(1, scaled_y(rectangle.dy)), dialog.window,
+        reinterpret_cast<HMENU>(static_cast<std::uintptr_t>(tmc)),
+        GetModuleHandleW(nullptr), nullptr);
+    if (state.window != nullptr) {
+        HFONT font = unicode_font_combo_ui_font();
+        if (font == nullptr) {
+            font = reinterpret_cast<HFONT>(
+                GetStockObject(DEFAULT_GUI_FONT));
+        }
+        SendMessageW(state.window, WM_SETFONT,
+                     reinterpret_cast<WPARAM>(font), TRUE);
+    }
+    return state.window;
+}
+#endif
+
 void create_static_text(DialogState& dialog, const char* caption,
                         const Rec& rectangle) {
     if (dialog.window == nullptr || !IsWindow(dialog.window)) {
@@ -1283,6 +1331,70 @@ void refresh_font_control_value(DialogState& dialog, const Tmc raw_tmc,
     }
 }
 
+#ifdef OPUS_X64
+struct WindowsFontChoice {
+    std::wstring display_name;
+    std::string legacy_name;
+};
+
+std::string font_name_to_acp(const std::wstring& name) {
+    const int bytes = WideCharToMultiByte(
+        CP_ACP, 0, name.c_str(), -1, nullptr, 0, "?", nullptr);
+    if (bytes <= 1) {
+        return {};
+    }
+    std::string result(static_cast<std::size_t>(bytes), '\0');
+    WideCharToMultiByte(CP_ACP, 0, name.c_str(), -1,
+                        result.data(), bytes, "?", nullptr);
+    result.resize(static_cast<std::size_t>(bytes - 1));
+    return result;
+}
+
+int CALLBACK collect_system_font_w(const LOGFONTW* logical_font,
+                                   const TEXTMETRICW*, DWORD,
+                                   LPARAM parameter) {
+    if (logical_font == nullptr || logical_font->lfFaceName[0] == L'\0' ||
+        logical_font->lfFaceName[0] == L'@') {
+        return 1;
+    }
+    auto* fonts =
+        reinterpret_cast<std::vector<WindowsFontChoice>*>(parameter);
+    WindowsFontChoice choice;
+    choice.display_name = logical_font->lfFaceName;
+    choice.legacy_name = font_name_to_acp(choice.display_name);
+    fonts->push_back(std::move(choice));
+    return 1;
+}
+
+std::vector<WindowsFontChoice> installed_windows_fonts() {
+    std::vector<WindowsFontChoice> fonts;
+    const HDC dc = GetDC(nullptr);
+    if (dc != nullptr) {
+        LOGFONTW logical_font{};
+        logical_font.lfCharSet = DEFAULT_CHARSET;
+        EnumFontFamiliesExW(
+            dc, &logical_font,
+            reinterpret_cast<FONTENUMPROCW>(collect_system_font_w),
+            reinterpret_cast<LPARAM>(&fonts), 0);
+        ReleaseDC(nullptr, dc);
+    }
+    std::sort(fonts.begin(), fonts.end(),
+              [](const WindowsFontChoice& left,
+                 const WindowsFontChoice& right) {
+                  return _wcsicmp(left.display_name.c_str(),
+                                  right.display_name.c_str()) < 0;
+              });
+    fonts.erase(
+        std::unique(fonts.begin(), fonts.end(),
+                    [](const WindowsFontChoice& left,
+                       const WindowsFontChoice& right) {
+                        return _wcsicmp(left.display_name.c_str(),
+                                        right.display_name.c_str()) == 0;
+                    }),
+        fonts.end());
+    return fonts;
+}
+#else
 int CALLBACK collect_system_font(const LOGFONTA* logical_font,
                                  const TEXTMETRICA*, DWORD, LPARAM parameter) {
     if (logical_font == nullptr || logical_font->lfFaceName[0] == '\0' ||
@@ -1317,6 +1429,38 @@ std::vector<std::string> installed_windows_fonts() {
                 fonts.end());
     return fonts;
 }
+#endif
+
+#ifdef OPUS_X64
+void replace_font_list_entries(
+    DialogState& dialog, const Tmc tmc,
+    const std::vector<WindowsFontChoice>& entries) {
+    auto& state = dialog.controls[tmc];
+
+    std::wstring edit_text;
+    if (state.window != nullptr && IsWindow(state.window)) {
+        const int length = GetWindowTextLengthW(state.window);
+        std::vector<wchar_t> buffer(static_cast<std::size_t>(length) + 1);
+        GetWindowTextW(state.window, buffer.data(),
+                       static_cast<int>(buffer.size()));
+        edit_text = buffer.data();
+    }
+
+    state.entries.clear();
+    reset_native_list(state);
+
+    for (const auto& entry : entries) {
+        state.entries.push_back(entry.legacy_name);
+        SendMessageW(state.window, CB_ADDSTRING, 0,
+                     reinterpret_cast<LPARAM>(
+                         entry.display_name.c_str()));
+    }
+
+    if (!edit_text.empty()) {
+        SetWindowTextW(state.window, edit_text.c_str());
+    }
+}
+#endif
 
 void replace_list_entries(DialogState& dialog, const Tmc tmc,
                           const std::vector<std::string>& entries) {
@@ -1342,7 +1486,11 @@ void replace_list_entries(DialogState& dialog, const Tmc tmc,
 
 bool populate_windows_font_control(DialogState& dialog, const Tmc tmc) {
     if (is_font_name_control(dialog, tmc)) {
+#ifdef OPUS_X64
+        replace_font_list_entries(dialog, tmc, installed_windows_fonts());
+#else
         replace_list_entries(dialog, tmc, installed_windows_fonts());
+#endif
         return !dialog.controls[tmc].entries.empty();
     }
     if (is_font_size_control(dialog, tmc)) {
@@ -1635,8 +1783,13 @@ void materialize_character_template(DialogState& dialog) {
         WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWN | CBS_AUTOHSCROLL;
     create_static_text(dialog, "Character", {4, 4, 44, 9});
     create_static_text(dialog, "&Font:", {4, 14, 35, 9});
+#ifdef OPUS_X64
+    create_native_unicode_font_combo(dialog, kTmcCharacterName,
+                                     {4, 24, 80, 68}, combo_style);
+#else
     create_native_control(dialog, kTmcCharacterName, "COMBOBOX", "",
                           {4, 24, 80, 68}, combo_style);
+#endif
     create_static_text(dialog, "&Points:", {88, 14, 35, 9});
     create_native_control(dialog, kTmcCharacterSize, "COMBOBOX", "",
                           {88, 24, 40, 68}, combo_style);
@@ -1776,15 +1929,25 @@ void materialize_icon_bar_template(DialogState& dialog) {
         const bool win3 = (*dialog.template_handle)->rec.dx == 160;
         if (win3) {
             create_static_text(dialog, "Font:", {4, 3, 20, 8});
+#ifdef OPUS_X64
+            create_native_unicode_font_combo(dialog, kTmcUserMin,
+                                             {26, 1, 76, 67}, combo_style);
+#else
             create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {26, 1, 76, 67}, combo_style);
+#endif
             create_static_text(dialog, "Pts:", {108, 3, 14, 8});
             create_native_control(dialog, kTmcUserMin + 1, "COMBOBOX", "",
                                   {127, 1, 28, 67}, combo_style);
         } else {
             create_static_text(dialog, "Font:", {4, 3, 20, 8});
+#ifdef OPUS_X64
+            create_native_unicode_font_combo(dialog, kTmcUserMin,
+                                             {29, 1, 80, 68}, combo_style);
+#else
             create_native_control(dialog, kTmcUserMin, "COMBOBOX", "",
                                   {29, 1, 80, 68}, combo_style);
+#endif
             create_static_text(dialog, "Pts:", {115, 3, 16, 8});
             create_native_control(dialog, kTmcUserMin + 1, "COMBOBOX", "",
                                   {134, 1, 32, 68}, combo_style);

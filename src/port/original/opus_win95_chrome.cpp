@@ -900,6 +900,22 @@ std::string combo_item(HWND combo, int index) {
     return text.data();
 }
 
+std::wstring combo_item_wide(HWND combo, int index) {
+    const LRESULT length =
+        SendMessageW(combo, CB_GETLBTEXTLEN, index, 0);
+    if (length == CB_ERR || length < 0) {
+        return {};
+    }
+    std::vector<wchar_t> text(
+        static_cast<std::size_t>(length) + 1, L'\0');
+    if (SendMessageW(
+            combo, CB_GETLBTEXT, index,
+            reinterpret_cast<LPARAM>(text.data())) == CB_ERR) {
+        return {};
+    }
+    return text.data();
+}
+
 bool combo_contains(HWND combo, const char* value) {
     return SendMessageA(combo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
                         reinterpret_cast<LPARAM>(value)) != CB_ERR;
@@ -970,11 +986,13 @@ bool combo_or_child_has_focus(HWND combo) {
     return focus == combo || (focus != nullptr && IsChild(combo, focus));
 }
 
-void sync_combo(HWND mirror, HWND source, int& copied_count) {
+void sync_combo(HWND mirror, HWND source, int& copied_count,
+                bool unicode_source = false) {
     if (mirror == nullptr || source == nullptr || !IsWindow(source)) {
         return;
     }
-    const int count = static_cast<int>(SendMessageA(source, CB_GETCOUNT, 0, 0));
+    const int count = static_cast<int>(
+        SendMessageW(source, CB_GETCOUNT, 0, 0));
     if (count >= 0 && count != copied_count) {
         std::wstring mirror_text;
         const int mirror_length = GetWindowTextLengthW(mirror);
@@ -982,7 +1000,10 @@ void sync_combo(HWND mirror, HWND source, int& copied_count) {
         GetWindowTextW(mirror, &mirror_text[0], mirror_length + 1);
         SendMessageW(mirror, CB_RESETCONTENT, 0, 0);
         for (int index = 0; index < count; ++index) {
-            const std::wstring item = wide_from_ansi(combo_item(source, index));
+            const std::wstring item =
+                unicode_source
+                    ? combo_item_wide(source, index)
+                    : wide_from_ansi(combo_item(source, index));
             SendMessageW(mirror, CB_ADDSTRING, 0,
                          reinterpret_cast<LPARAM>(item.c_str()));
         }
@@ -994,10 +1015,30 @@ void sync_combo(HWND mirror, HWND source, int& copied_count) {
         if (selection != CB_ERR && selection < count) {
             SendMessageW(mirror, CB_SETCURSEL, selection, 0);
         } else {
-            const int length = GetWindowTextLengthA(source);
-            std::vector<char> text(static_cast<std::size_t>(length) + 1);
-            GetWindowTextA(source, text.data(), static_cast<int>(text.size()));
-            const std::wstring source_text = wide_from_ansi(text.data());
+            std::wstring source_text;
+            if (unicode_source) {
+                const int length = GetWindowTextLengthW(source);
+                std::vector<wchar_t> text(
+                    static_cast<std::size_t>((std::max)(0, length)) + 1,
+                    L'\0');
+                if (length >= 0) {
+                    GetWindowTextW(
+                        source, text.data(),
+                        static_cast<int>(text.size()));
+                    source_text = text.data();
+                }
+            } else {
+                const int length = GetWindowTextLengthA(source);
+                std::vector<char> text(
+                    static_cast<std::size_t>((std::max)(0, length)) + 1,
+                    '\0');
+                if (length >= 0) {
+                    GetWindowTextA(
+                        source, text.data(),
+                        static_cast<int>(text.size()));
+                    source_text = wide_from_ansi(text.data());
+                }
+            }
             if (!source_text.empty()) {
                 SetWindowTextW(mirror, source_text.c_str());
             }
@@ -1014,7 +1055,9 @@ void sync_mirrors(HWND toolbar, ToolbarState& state) {
     }
     sync_combo(state.style_combo, state.source_style,
                state.copied_style_count);
-    sync_combo(state.font_combo, state.source_font, state.copied_font_count);
+    sync_combo(
+        state.font_combo, state.source_font,
+        state.copied_font_count, true);
     sync_combo(state.size_combo, state.source_size, state.copied_size_count);
 }
 
