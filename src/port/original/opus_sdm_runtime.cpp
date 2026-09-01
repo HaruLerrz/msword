@@ -144,6 +144,10 @@ struct Win95SaveAlias {
 Win95SaveAlias g_win95_save_alias;
 std::unordered_map<std::string, std::string> g_win95_saved_aliases;
 std::string g_win95_staging_directory;
+#ifdef OPUS_X64
+std::unordered_map<std::string, std::wstring> g_x64_font_alias_to_wide;
+int g_x64_unicode_font_alias_counter = 1;
+#endif
 
 struct Win95AliasCleanup {
     ~Win95AliasCleanup() {
@@ -1283,19 +1287,142 @@ void refresh_font_control_value(DialogState& dialog, const Tmc raw_tmc,
     }
 }
 
+bool usable_legacy_font_name(const std::string& name) {
+    return !name.empty() && name.front() != '@' &&
+           name.find('?') == std::string::npos;
+}
+
+std::string trim_legacy_font_name_to_lf_facesize(
+    const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    const char* const begin = text.c_str();
+    const char* current = begin;
+    const char* accepted = begin;
+    while (*current != '\0') {
+        const char* const next = CharNextA(current);
+        if (next <= current) {
+            break;
+        }
+        if (static_cast<std::size_t>(next - begin) >= LF_FACESIZE) {
+            break;
+        }
+        accepted = next;
+        current = next;
+    }
+
+    std::string result(begin, static_cast<std::size_t>(accepted - begin));
+    while (!result.empty() && result.back() == ' ') {
+        result.pop_back();
+    }
+    return result;
+}
+
+std::string wide_to_acp_lossless(const wchar_t* text) {
+    if (text == nullptr || text[0] == L'\0') {
+        return {};
+    }
+
+    BOOL used_default = FALSE;
+    const int byte_count = WideCharToMultiByte(
+        CP_ACP, WC_NO_BEST_FIT_CHARS, text, -1, nullptr, 0, "?",
+        &used_default);
+    if (byte_count <= 1 || used_default) {
+        return {};
+    }
+
+    std::string converted(static_cast<std::size_t>(byte_count), '\0');
+    used_default = FALSE;
+    if (WideCharToMultiByte(CP_ACP, WC_NO_BEST_FIT_CHARS, text, -1,
+                            converted.data(), byte_count, "?", &used_default) <=
+            0 ||
+        used_default) {
+        return {};
+    }
+
+    converted.resize(static_cast<std::size_t>(byte_count - 1));
+    converted = trim_legacy_font_name_to_lf_facesize(converted);
+    return usable_legacy_font_name(converted) ? converted : std::string{};
+}
+
+std::string make_generated_unicode_font_alias() {
+    char alias[LF_FACESIZE] = {};
+    for (int attempt = 0; attempt < 10000; ++attempt) {
+        std::snprintf(alias, sizeof(alias), "UFont %04d",
+                      g_x64_unicode_font_alias_counter++);
+        if (g_x64_font_alias_to_wide.find(alias) ==
+            g_x64_font_alias_to_wide.end()) {
+            return alias;
+        }
+    }
+    return {};
+}
+
+int CALLBACK collect_wide_system_font(const LOGFONTW* logical_font,
+                                      const TEXTMETRICW*, DWORD,
+                                      LPARAM parameter) {
+    if (logical_font == nullptr || logical_font->lfFaceName[0] == L'\0' ||
+        logical_font->lfFaceName[0] == L'@') {
+        return 1;
+    }
+
+    const std::wstring wide_name = logical_font->lfFaceName;
+    std::string legacy_name = wide_to_acp_lossless(wide_name.c_str());
+    if (legacy_name.empty()) {
+        legacy_name = make_generated_unicode_font_alias();
+    }
+    if (legacy_name.empty()) {
+        return 1;
+    }
+
+    auto* fonts = reinterpret_cast<std::vector<std::string>*>(parameter);
+    fonts->push_back(legacy_name);
+    if (g_x64_font_alias_to_wide.find(legacy_name) ==
+        g_x64_font_alias_to_wide.end()) {
+        g_x64_font_alias_to_wide[legacy_name] = wide_name;
+    }
+    return 1;
+}
+
+void collect_wide_gdi_family_names(std::vector<std::string>& fonts) {
+    const HDC dc = GetDC(nullptr);
+    if (dc == nullptr) {
+        return;
+    }
+
+    LOGFONTW logical_font{};
+    logical_font.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesExW(dc, &logical_font,
+                        reinterpret_cast<FONTENUMPROCW>(
+                            collect_wide_system_font),
+                        reinterpret_cast<LPARAM>(&fonts), 0);
+    ReleaseDC(nullptr, dc);
+}
+
 int CALLBACK collect_system_font(const LOGFONTA* logical_font,
                                  const TEXTMETRICA*, DWORD, LPARAM parameter) {
-    if (logical_font == nullptr || logical_font->lfFaceName[0] == '\0' ||
-        logical_font->lfFaceName[0] == '@') {
+    if (logical_font == nullptr) {
+        return 1;
+    }
+    const std::string name =
+        trim_legacy_font_name_to_lf_facesize(logical_font->lfFaceName);
+    if (!usable_legacy_font_name(name)) {
         return 1;
     }
     auto* fonts = reinterpret_cast<std::vector<std::string>*>(parameter);
-    fonts->emplace_back(logical_font->lfFaceName);
+    fonts->emplace_back(name);
     return 1;
 }
 
 std::vector<std::string> installed_windows_fonts() {
     std::vector<std::string> fonts;
+#ifdef OPUS_X64
+    g_x64_font_alias_to_wide.clear();
+    g_x64_unicode_font_alias_counter = 1;
+    collect_wide_gdi_family_names(fonts);
+#else
     const HDC dc = GetDC(nullptr);
     if (dc != nullptr) {
         LOGFONTA logical_font{};
@@ -1305,6 +1432,7 @@ std::vector<std::string> installed_windows_fonts() {
                             reinterpret_cast<LPARAM>(&fonts), 0);
         ReleaseDC(nullptr, dc);
     }
+#endif
     std::sort(fonts.begin(), fonts.end(),
               [](const std::string& left, const std::string& right) {
                   return _stricmp(left.c_str(), right.c_str()) < 0;
@@ -2631,6 +2759,36 @@ HWND vhWndMsgBoxParent = nullptr;
 
 extern void** hcabDlgCur;
 extern std::uintptr_t wRefDlgCur;
+
+int OpusX64ResolveFontAlias(const char* alias, wchar_t* face_name,
+                            const int face_name_count) {
+#ifdef OPUS_X64
+    if (alias == nullptr || face_name == nullptr || face_name_count <= 0) {
+        return false;
+    }
+
+    auto found = g_x64_font_alias_to_wide.find(alias);
+    if (found == g_x64_font_alias_to_wide.end()) {
+        const std::string short_alias =
+            trim_legacy_font_name_to_lf_facesize(alias);
+        found = g_x64_font_alias_to_wide.find(short_alias);
+        if (found == g_x64_font_alias_to_wide.end()) {
+            return false;
+        }
+    }
+
+    const std::wstring& wide_name = found->second;
+    const int limit = (std::min)(
+        face_name_count - 1, static_cast<int>(wide_name.size()));
+    for (int index = 0; index < limit; ++index) {
+        face_name[index] = wide_name[static_cast<std::size_t>(index)];
+    }
+    face_name[limit] = L'\0';
+    return true;
+#else
+    return false;
+#endif
+}
 
 void OpusRegisterOriginalDialogCallbacks(
     OriginalListProc list_font_name, OriginalListProc list_font_size,

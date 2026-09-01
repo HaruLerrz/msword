@@ -46,6 +46,42 @@ extern CHAR         szEmpty[];
 
 HANDNATIVE struct FCE *PfceLruGet();
 
+#ifdef OPUS_X64
+extern int OpusX64ResolveFontAlias(const char *, WCHAR *, int);
+
+static HFONT OpusX64CreateFontIndirectWithAlias(plf)
+LOGFONT *plf;
+{
+	WCHAR rgchFace[LF_FACESIZE];
+	LOGFONTW lfw;
+	int ich;
+
+	if (!OpusX64ResolveFontAlias(plf->lfFaceName, rgchFace, LF_FACESIZE))
+		return CreateFontIndirect((LPLOGFONT)plf);
+
+	SetBytes((char *)&lfw, 0, sizeof(lfw));
+	lfw.lfHeight = plf->lfHeight;
+	lfw.lfWidth = plf->lfWidth;
+	lfw.lfEscapement = plf->lfEscapement;
+	lfw.lfOrientation = plf->lfOrientation;
+	lfw.lfWeight = plf->lfWeight;
+	lfw.lfItalic = plf->lfItalic;
+	lfw.lfUnderline = plf->lfUnderline;
+	lfw.lfStrikeOut = plf->lfStrikeOut;
+	lfw.lfCharSet = DEFAULT_CHARSET;
+	lfw.lfOutPrecision = plf->lfOutPrecision;
+	lfw.lfClipPrecision = plf->lfClipPrecision;
+	lfw.lfQuality = plf->lfQuality;
+	lfw.lfPitchAndFamily = plf->lfPitchAndFamily;
+
+	for (ich = 0; ich < LF_FACESIZE - 1 && rgchFace[ich] != 0; ++ich)
+		lfw.lfFaceName[ich] = rgchFace[ich];
+	lfw.lfFaceName[ich] = 0;
+
+	return CreateFontIndirectW(&lfw);
+}
+#endif
+
 
 /*  LoadFont( pchp, fWidthsOnly )
 *
@@ -312,7 +348,11 @@ LValidateFce:
 
 /* Call Windows to request the font */
 
+#ifdef OPUS_X64
+	if ((pfce->hfont = OpusX64CreateFontIndirectWithAlias(&lf)) == NULL)
+#else
 	if ((pfce->hfont = CreateFontIndirect( (LPLOGFONT)&lf )) == NULL)
+#endif
 		{
 #ifdef DFONT
 		CommSzSz(SzFrame("Failed to create logical font!"),szEmpty);
@@ -481,6 +521,22 @@ LNewMetrics:
 
 		GetTextFace( hdc, LF_FACESIZE, (LPSTR) pffn->szFfn );
 
+#ifdef OPUS_X64
+		if (lf.lfFaceName[0] == 'U' &&
+				lf.lfFaceName[1] == 'F' &&
+				lf.lfFaceName[2] == 'o' &&
+				lf.lfFaceName[3] == 'n' &&
+				lf.lfFaceName[4] == 't' &&
+				lf.lfFaceName[5] == ' ')
+			{
+			/* Preserve runtime Unicode font aliases across printer actual
+			font normalization.  GetTextFaceA can only return an ANSI face
+			name here, so replacing the alias with that lossy name can break
+			the later screen-font request. */
+			fcidActual.ibstFont = pfce->fcidRequest.ibstFont;
+			}
+		else
+#endif
 		if (!FNeNcSz(pffn->szFfn, lf.lfFaceName))
 			{
 			/* The face name is the same as what we requested; so, the
