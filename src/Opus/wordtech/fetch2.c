@@ -979,12 +979,19 @@ EXPORT int OpusX64FtcFromFontName(sz)
 const char *sz;
 {
 	int cch;
+	int ibst;
+	int ibstMac;
+	int ftc;
+	int fAdded;
 	struct FFN *pffn;
+	struct FFN *pffnExisting;
 	char rgch[cbFfnLast] = {0};
 
-	pffn = (struct FFN *)rgch;
-	if (sz == NULL || *sz == '\0')
+	if (sz == NULL || *sz == '\0' || selCur.doc == docNil ||
+			vhsttbFont == hNil || *vhsttbFont == NULL)
 		return wNinch;
+
+	pffn = (struct FFN *)rgch;
 	if (CchSz(sz) > LF_FACESIZE - 1)
 		{
 		bltbyte(sz, pffn->szFfn, LF_FACESIZE - 1);
@@ -993,10 +1000,58 @@ const char *sz;
 		}
 	else
 		cch = CchCopySz(sz, pffn->szFfn);
+
 	cch = CchStripString(pffn->szFfn, cch);
 	if (cch == 0)
 		return wNinch;
-	return FtcValidateFont(pffn);
+
+	pffn->ffid = FF_DONTCARE;
+	/*
+	 * FFN is variable-length: szFfn keeps its NUL terminator, and the
+	 * charset byte lives after that terminator.  CchStripString() returns
+	 * the visible character count, so recompute the packed size from CchSz().
+	 */
+	pffn->cbFfnM1 = CbFfnFromCchSzFfn(CchSz(pffn->szFfn)) - 1;
+	ChsPffn(pffn) = DEFAULT_CHARSET;
+
+	ibstMac = (*vhsttbFont)->ibstMac;
+	fAdded = fFalse;
+	for (ibst = 0; ibst < ibstMac; ++ibst)
+		{
+		pffnExisting = (struct FFN *)PstFromSttb(vhsttbFont, ibst);
+		if (pffnExisting != NULL &&
+				!FNeNcSz(pffnExisting->szFfn, pffn->szFfn))
+			break;
+		}
+
+	if (ibst == ibstMac)
+		{
+		if (ibstMac >= ibstFontNil)
+			return ftcDefault;
+
+		ibst = IbstAddStToSttb(vhsttbFont, pffn);
+		if (ibst == iNil || ibst == ibstNil ||
+				ibst < 0 || ibst >= ibstFontNil ||
+				vmerr.fMemFail)
+			return ftcDefault;
+		fAdded = fTrue;
+		}
+
+	/*
+	 * FtcFromDocIbst stores ibst in an IBSTFONT byte.  With the capped x64
+	 * preload below, selected fonts should be added below ibstFontNil.
+	 * Guard anyway so a stale or oversized table cannot corrupt the DOD map.
+	 */
+	if (ibst < 0 || ibst >= ibstFontNil)
+		return ftcDefault;
+
+	pffnExisting = (struct FFN *)PstFromSttb(vhsttbFont, ibst);
+	ftc = FtcFromDocIbst(selCur.doc, ibst);
+
+	if (ftc == valNil || ftc < 0 || ftc > ftcValMax)
+		return ftcDefault;
+
+	return ftc;
 }
 
 /* Variant used while a DOCX is being opened.  The new document has not yet

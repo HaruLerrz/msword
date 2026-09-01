@@ -2850,6 +2850,16 @@ struct PREFD *pprefd;
 		goto LError;
 
 	Assert(hsttbFont == hNil || !(*hsttbFont)->fExternal);
+#ifdef OPUS_X64
+	/*
+	 * Printer font tables are cached in WINWORD.INI.  A previous x64 run can
+	 * re-import an already overfilled master table before current enumeration
+	 * begins.  Reject oversized cached printer data and use the existing
+	 * LError path, which marks printer state dirty for a clean rebuild.
+	 */
+	if (hsttbFont != hNil && (*hsttbFont)->ibstMac > 128)
+		goto LError;
+#endif
 
 	if (pprefd->cbSttbPaf)
 		{

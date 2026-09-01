@@ -779,7 +779,20 @@ int fty;            /* font type:
 /* add ffn to the master font table (vhsttbFont) if not already there */
 
 	if ((ibstFont = IbstFindSzFfn(vhsttbFont, pffn )) == iNil)
+		{
+#ifdef OPUS_X64
+		/*
+		 * IBSTFONT is CHAR and 255 is ibstFontNil.  Modern Windows can
+		 * enumerate hundreds of fonts before the user chooses anything,
+		 * which leaves selected faces above the one-byte DOD font-map range.
+		 * Keep the legacy preload bounded and leave room for document-used
+		 * fonts to be added later by OpusX64FtcFromFontName().
+		 */
+		if ((*vhsttbFont)->ibstMac >= 128)
+			return fFalse;
+#endif
 		ibstFont = IbstAddStToSttb(vhsttbFont,pffn);
+		}
 	else
 		/* in case charset, pitch, or family changed */
 		FChangeStInSttb(vhsttbFont, ibstFont, pffn);
